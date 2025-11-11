@@ -1,0 +1,155 @@
+
+# docker-compose.yml
+#
+# Production deployment manifest for the Trading Engine Services stack.
+# This file is the single source of truth for the application's runtime configuration.
+#
+# It assumes:
+#   1. All service images are pre-built and available in a container registry.
+#   2. It connects to an existing, external network ('central-data-platform')
+#      which provides access to shared Redis and PostgreSQL (via PgBouncer).
+#   3. All secrets are managed on the Docker host and declared here as external.
+
+services:
+  # --------------------------------------------------------------------------
+  # Core Services (as defined in PROJECT_BLUEPRINT.md)
+  # --------------------------------------------------------------------------
+  executor:
+    image: your-registry/trading-engine-executor:${TAG:-latest}
+    container_name: trading-engine-executor
+    restart: unless-stopped
+    depends_on:
+      - janitor
+    networks:
+      - central-data-platform
+    environment:
+      # Non-sensitive configuration provided via environment variables.
+      - SERVICE_NAME=executor
+      - REDIS_HOST=redis.internal # Assuming service discovery on the external network
+      - POSTGRES_HOST=pgbouncer.internal
+      - POSTGRES_PORT=6432
+      - POSTGRES_USER=trading_app_user
+      - POSTGRES_DB=trading_db
+      # The application reads the secret from this file path inside the container.
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
+      - OCI_PASSWORD_FILE=/run/secrets/oci_password
+    secrets:
+      - postgres_password
+      - oci_password
+      - deribit_client_id
+      - deribit_client_secret
+      - jwt_public_key
+    mem_limit: 256m
+    mem_reservation: 128m
+
+  receiver:
+    image: your-registry/trading-engine-receiver:${TAG:-latest}
+    container_name: trading-engine-receiver
+    restart: unless-stopped
+    depends_on:
+      - janitor
+    networks:
+      - central-data-platform
+    environment:
+      - SERVICE_NAME=receiver
+      - REDIS_HOST=redis.internal
+    secrets:
+      - deribit_client_id
+      - deribit_client_secret
+    mem_limit: 384m
+    mem_reservation: 256m
+
+  distributor:
+    image: your-registry/trading-engine-distributor:${TAG:-latest}
+    container_name: trading-engine-distributor
+    restart: unless-stopped
+    depends_on:
+      - janitor
+    networks:
+      - central-data-platform
+    environment:
+      - SERVICE_NAME=distributor
+      - REDIS_HOST=redis.internal
+      - POSTGRES_HOST=pgbouncer.internal
+      - POSTGRES_PORT=6432
+      - POSTGRES_USER=trading_app_user
+      - POSTGRES_DB=trading_db
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    mem_limit: 384m
+    mem_reservation: 256m
+
+  analyzer:
+    image: your-registry/trading-engine-analyzer:${TAG:-latest}
+    container_name: trading-engine-analyzer
+    restart: unless-stopped
+    depends_on:
+      - janitor
+    networks:
+      - central-data-platform
+    environment:
+      - SERVICE_NAME=analyzer
+      - REDIS_HOST=redis.internal
+    mem_limit: 256m
+    mem_reservation: 128m
+
+  janitor:
+    image: your-registry/trading-engine-janitor:${TAG:-latest}
+    container_name: trading-engine-janitor
+    restart: unless-stopped # Janitor is critical for bootstrap, must stay up.
+    networks:
+      - central-data-platform
+    environment:
+      - SERVICE_NAME=janitor
+      - REDIS_HOST=redis.internal
+      - POSTGRES_HOST=pgbouncer.internal
+      - POSTGRES_PORT=6432
+      - POSTGRES_USER=trading_app_user
+      - POSTGRES_DB=trading_db
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
+    secrets:
+      - postgres_password
+
+  # --------------------------------------------------------------------------
+  # Utility & Operational Containers
+  # --------------------------------------------------------------------------
+  migrator:
+    # This container is used for running one-off database migration commands.
+    image: your-registry/trading-engine-migrator:${TAG:-latest}
+    container_name: trading-engine-migrator
+    # Does not run a service; kept alive to allow 'docker compose exec' commands.
+    command: tail -f /dev/null
+    networks:
+      - central-data-platform
+    environment:
+      - POSTGRES_HOST=pgbouncer.internal
+      - POSTGRES_PORT=6432
+      - POSTGRES_USER=trading_app_user
+      - POSTGRES_DB=trading_db
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
+    secrets:
+      - postgres_password
+
+# ----------------------------------------------------------------------------
+# Top-level resource definitions
+# ----------------------------------------------------------------------------
+networks:
+  # This application connects to a pre-existing network managed by the platform.
+  central-data-platform:
+    external: true
+
+secrets:
+  # All secrets are managed on the Docker host and are external to this compose file.
+  # The name here must match the name of the secret created on the host.
+  postgres_password:
+    external: true
+  oci_password:
+    external: true
+  deribit_client_id:
+    external: true
+  deribit_client_secret:
+    external: true
+  # Added secret for JWT validation as per PROJECT_BLUEPRINT.md
+  jwt_public_key:
+    external: true
