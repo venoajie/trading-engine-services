@@ -2,17 +2,11 @@
 # docker-compose.yml
 #
 # Production deployment manifest for the Trading Engine Services stack.
-# This file is the single source of truth for the application's runtime configuration.
-#
-# It assumes:
-#   1. All service images are pre-built and available in a container registry.
-#   2. It connects to an existing, external network ('central-data-platform')
-#      which provides access to shared Redis and PostgreSQL (via PgBouncer).
-#   3. All secrets are managed on the Docker host and declared here as external.
+# CORRECTED to conform to the host's direct volume mount pattern for secrets.
 
 services:
   # --------------------------------------------------------------------------
-  # Core Services (as defined in PROJECT_BLUEPRINT.md)
+  # Core Services
   # --------------------------------------------------------------------------
   executor:
     image: your-registry/trading-engine-executor:${TAG:-latest}
@@ -23,22 +17,28 @@ services:
     networks:
       - central-data-platform
     environment:
-      # Non-sensitive configuration provided via environment variables.
+      # Non-sensitive configuration
       - SERVICE_NAME=executor
-      - REDIS_HOST=redis.internal # Assuming service discovery on the external network
+      - REDIS_HOST=redis.internal
       - POSTGRES_HOST=pgbouncer.internal
       - POSTGRES_PORT=6432
       - POSTGRES_USER=trading_app_user
       - POSTGRES_DB=trading_db
-      # The application reads the secret from this file path inside the container.
+      # Environment variables pointing to the in-container paths of secrets
       - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
-      - OCI_PASSWORD_FILE=/run/secrets/oci_password
-    secrets:
-      - postgres_password
-      - oci_password
-      - deribit_client_id
-      - deribit_client_secret
-      - jwt_public_key
+      - OCI_DSN_FILE=/run/secrets/oci_dsn
+      - OCI_WALLET_DIR=/run/secrets/oracle_wallet
+      - DERIBIT_CLIENT_ID_FILE=/run/secrets/deribit_client_id
+      - DERIBIT_CLIENT_SECRET_FILE=/run/secrets/deribit_client_secret
+      - JWT_PUBLIC_KEY_FILE=/run/secrets/jwt_public_key
+    volumes:
+      # Mount secrets directly from the host's canonical /opt/secrets directory
+      - "/opt/secrets/trading_web_project_db_password.txt:/run/secrets/postgres_password:ro"
+      - "/opt/secrets/oracle_db_connection_string.txt:/run/secrets/oci_dsn:ro"
+      - "/opt/secrets/oracle_wallet_prod_user:/run/secrets/oracle_wallet:ro"
+      - "/opt/secrets/deribit_client_id.txt:/run/secrets/deribit_client_id:ro"
+      - "/opt/secrets/deribit_client_secret.txt:/run/secrets/deribit_client_secret:ro"
+      - "/opt/secrets/jwt_public_key.txt:/run/secrets/jwt_public_key:ro" # Assumes this file exists
     mem_limit: 256m
     mem_reservation: 128m
 
@@ -53,9 +53,11 @@ services:
     environment:
       - SERVICE_NAME=receiver
       - REDIS_HOST=redis.internal
-    secrets:
-      - deribit_client_id
-      - deribit_client_secret
+      - DERIBIT_CLIENT_ID_FILE=/run/secrets/deribit_client_id
+      - DERIBIT_CLIENT_SECRET_FILE=/run/secrets/deribit_client_secret
+    volumes:
+      - "/opt/secrets/deribit_client_id.txt:/run/secrets/deribit_client_id:ro"
+      - "/opt/secrets/deribit_client_secret.txt:/run/secrets/deribit_client_secret:ro"
     mem_limit: 384m
     mem_reservation: 256m
 
@@ -75,8 +77,8 @@ services:
       - POSTGRES_USER=trading_app_user
       - POSTGRES_DB=trading_db
       - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
-    secrets:
-      - postgres_password
+    volumes:
+      - "/opt/secrets/trading_web_project_db_password.txt:/run/secrets/postgres_password:ro"
     mem_limit: 384m
     mem_reservation: 256m
 
@@ -97,7 +99,7 @@ services:
   janitor:
     image: your-registry/trading-engine-janitor:${TAG:-latest}
     container_name: trading-engine-janitor
-    restart: unless-stopped # Janitor is critical for bootstrap, must stay up.
+    restart: unless-stopped
     networks:
       - central-data-platform
     environment:
@@ -108,17 +110,15 @@ services:
       - POSTGRES_USER=trading_app_user
       - POSTGRES_DB=trading_db
       - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
-    secrets:
-      - postgres_password
+    volumes:
+      - "/opt/secrets/trading_web_project_db_password.txt:/run/secrets/postgres_password:ro"
 
   # --------------------------------------------------------------------------
   # Utility & Operational Containers
   # --------------------------------------------------------------------------
   migrator:
-    # This container is used for running one-off database migration commands.
     image: your-registry/trading-engine-migrator:${TAG:-latest}
     container_name: trading-engine-migrator
-    # Does not run a service; kept alive to allow 'docker compose exec' commands.
     command: tail -f /dev/null
     networks:
       - central-data-platform
@@ -128,28 +128,14 @@ services:
       - POSTGRES_USER=trading_app_user
       - POSTGRES_DB=trading_db
       - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
-    secrets:
-      - postgres_password
+    volumes:
+      - "/opt/secrets/trading_web_project_db_password.txt:/run/secrets/postgres_password:ro"
 
 # ----------------------------------------------------------------------------
 # Top-level resource definitions
 # ----------------------------------------------------------------------------
 networks:
-  # This application connects to a pre-existing network managed by the platform.
   central-data-platform:
     external: true
 
-secrets:
-  # All secrets are managed on the Docker host and are external to this compose file.
-  # The name here must match the name of the secret created on the host.
-  postgres_password:
-    external: true
-  oci_password:
-    external: true
-  deribit_client_id:
-    external: true
-  deribit_client_secret:
-    external: true
-  # Added secret for JWT validation as per PROJECT_BLUEPRINT.md
-  jwt_public_key:
-    external: true
+# The 'secrets' block has been removed as it is not used in this environment.
